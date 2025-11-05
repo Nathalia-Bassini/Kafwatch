@@ -14,7 +14,6 @@ class ComposeGenerator:
         # 1. Define o conteúdo estático do docker-compose.yml
         #    *** MODIFICAÇÃO: Adicionei a definição de 'networks' ***
         self.compose_config = {
-            'version': '3.8', # Boa prática especificar a versão
             'services': {
                 'rtsp-proxy': {
                     'image': 'bluenviron/mediamtx:latest',
@@ -45,6 +44,21 @@ class ComposeGenerator:
         self.mediamtx_config = {
             'paths': {} # Os 'paths' serão preenchidos
         }
+
+        # 3. Cria o arquivo Docker para rodar em cada camera
+        self.docker_config = [
+            'FROM python:3.10-slim\n',
+            'WORKDIR /app \n',
+            """RUN apt-get update && apt-get install -y --no-install-recommends \\
+    libgl1 \\
+    ffmpeg \\
+    v4l-utils \\
+    && rm -rf /var/lib/apt/lists/*
+""",
+            'RUN pip install opencv-python python-dotenv\n',
+            'COPY capture_test.py /app/capture_test.py\n',
+            'CMD ["python", "capture_test.py"]'
+        ]
 
     def generate_files(self, scan_results):
         """
@@ -81,7 +95,8 @@ class ComposeGenerator:
                 worker_rtsp_url = f"rtsp://rtsp-proxy:8554/{path_name}"
 
                 self.compose_config['services'][worker_service_name] = {
-                    'build': '.', # Usa o Dockerfile na pasta atual
+                    'build': {'context': '..', 
+                              'dockerfile': 'docker_files/Dockerfile'}, 
                     'container_name': worker_service_name,
                     'restart': 'on-failure',
                     'depends_on': [
@@ -103,16 +118,19 @@ class ComposeGenerator:
                 cam_counter += 1
 
         # --- Salva os arquivos ---
-        compose_filename = "docker-compose.yml"
+        compose_filename = "docker_files/docker-compose.yml"
         with open(compose_filename, 'w') as f:
             yaml.dump(self.compose_config, f, default_flow_style=False, sort_keys=False)
         print(f"Arquivo gerado: {os.path.abspath(compose_filename)}")
 
-        mtx_filename = "mediamtx.yml"
+        mtx_filename = "docker_files/mediamtx.yml"
         with open(mtx_filename, 'w') as f:
             yaml.dump(self.mediamtx_config, f, default_flow_style=False, sort_keys=False)
         print(f"Arquivo gerado: {os.path.abspath(mtx_filename)}")
         
+        docker_filename = "docker_files/Dockerfile"
+        with open(docker_filename, 'w') as f:
+            f.writelines(self.docker_config)
         print("\n--- Relatório de Streams ---")
         for path, config in self.mediamtx_config['paths'].items():
             print(f"  [Câmera Real] {config['source']}")
