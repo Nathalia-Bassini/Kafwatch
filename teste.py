@@ -1,6 +1,6 @@
 from network.NetworkScanner import NetworkScanner
-from docker_generator.ComposeGenerator import ComposeGenerator
-import os
+from docker_manager.ComposeGenerator import ComposeGenerator
+from docker_manager.ComposeManager import ComposeManager
 
 if __name__ == "__main__":
     
@@ -10,5 +10,6 @@ if __name__ == "__main__":
     docker_compose_gen = ComposeGenerator("admin", "Aluno@00")
     scan_results = {ip: [554] for ip in cameras}  # Todas as câmeras na porta 554
     docker_compose_gen.generate_files(scan_results)
-    os.system("docker-compose -f docker_files/docker-compose.yml up --build -d")
+    compose_manager = ComposeManager("docker_files/docker-compose.yml")
+    compose_manager.up(build=True, detach=True)
     
