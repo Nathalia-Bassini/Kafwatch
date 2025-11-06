@@ -13,8 +13,8 @@ services:
     - camera-net
   worker-cam1:
     build:
-      context: ..
-      dockerfile: docker_files/Dockerfile
+      context: ../worker_build
+      dockerfile: Dockerfile
     container_name: worker-cam1
     restart: on-failure
     depends_on:
@@ -28,8 +28,8 @@ services:
     - camera-net
   worker-cam2:
     build:
-      context: ..
-      dockerfile: docker_files/Dockerfile
+      context: ../worker_build
+      dockerfile: Dockerfile
     container_name: worker-cam2
     restart: on-failure
     depends_on:
@@ -43,8 +43,8 @@ services:
     - camera-net
   worker-cam3:
     build:
-      context: ..
-      dockerfile: docker_files/Dockerfile
+      context: ../worker_build
+      dockerfile: Dockerfile
     container_name: worker-cam3
     restart: on-failure
     depends_on:

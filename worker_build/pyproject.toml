@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kafwatch-worker"
+version = "0.1.0"
+dependencies = [
+    # Coloque suas dependências aqui
+    "opencv-python",
+    "python-dotenv"
+    # "kafka-python" (quando você for usar)
+]
+
+[project.scripts]
+kafwatch-run = "kafwatch_worker.capture:main" 

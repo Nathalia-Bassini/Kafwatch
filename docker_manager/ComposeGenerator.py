@@ -55,11 +55,28 @@ class ComposeGenerator:
     v4l-utils \\
     && rm -rf /var/lib/apt/lists/*
 """,
-            'RUN pip install opencv-python python-dotenv\n',
-            'COPY capture_test.py /app/capture_test.py\n',
-            'CMD ["python", "capture_test.py"]'
+            'COPY . .\n',
+            'RUN pip install .\n',
+            'CMD ["kafwatch-run"]'
         ]
 
+        self.pyproject_config = [
+            """[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kafwatch-worker"
+version = "0.1.0"
+dependencies = [
+    # Coloque suas dependências aqui
+    "opencv-python",
+    "python-dotenv"
+    # "kafka-python" (quando você for usar)
+]
+
+[project.scripts]
+kafwatch-run = "kafwatch_worker.capture:main" """]
     def generate_files(self, scan_results):
         """
         Usa os resultados do scan para gerar os dois arquivos de configuração.
@@ -95,8 +112,8 @@ class ComposeGenerator:
                 worker_rtsp_url = f"rtsp://rtsp-proxy:8554/{path_name}"
 
                 self.compose_config['services'][worker_service_name] = {
-                    'build': {'context': '..', 
-                              'dockerfile': 'docker_files/Dockerfile'}, 
+                    'build': {'context': '../worker_build', 
+                              'dockerfile': 'Dockerfile'}, 
                     'container_name': worker_service_name,
                     'restart': 'on-failure',
                     'depends_on': [
@@ -117,20 +134,47 @@ class ComposeGenerator:
                 
                 cam_counter += 1
 
+
         # --- Salva os arquivos ---
+        if(not os.path.exists("docker_files")):
+            os.makedirs("docker_files")
+
         compose_filename = "docker_files/docker-compose.yml"
-        with open(compose_filename, 'w') as f:
-            yaml.dump(self.compose_config, f, default_flow_style=False, sort_keys=False)
-        print(f"Arquivo gerado: {os.path.abspath(compose_filename)}")
+        try:
+            with open(compose_filename, 'w') as f:
+                yaml.dump(self.compose_config, f, default_flow_style=False, sort_keys=False)
+            print(f"Arquivo gerado: {os.path.abspath(compose_filename)}")
+        except Exception as e:
+            print(f"Erro ao salvar docker-compose.yml: {e}")
 
         mtx_filename = "docker_files/mediamtx.yml"
-        with open(mtx_filename, 'w') as f:
-            yaml.dump(self.mediamtx_config, f, default_flow_style=False, sort_keys=False)
-        print(f"Arquivo gerado: {os.path.abspath(mtx_filename)}")
+        try:
+            with open(mtx_filename, 'w') as f:
+                yaml.dump(self.mediamtx_config, f, default_flow_style=False, sort_keys=False)
+            print(f"Arquivo gerado: {os.path.abspath(mtx_filename)}")
+        except Exception as e:
+            print(f"Erro ao salvar mediamtx.yml: {e}")
         
-        docker_filename = "docker_files/Dockerfile"
-        with open(docker_filename, 'w') as f:
-            f.writelines(self.docker_config)
+        # --- Salva os arquivos do worker ---
+        if(not os.path.exists("worker_build")):
+            os.makedirs("worker_build")
+
+        docker_filename = "worker_build/Dockerfile"
+        try:
+            with open(docker_filename, 'w') as f:
+                f.writelines(self.docker_config)
+
+        except Exception as e:
+            print(f"Erro ao salvar Dockerfile: {e}")
+
+        pyproject_filename = "worker_build/pyproject.toml"
+        try:
+            with open(pyproject_filename, 'w') as f:
+                f.writelines(self.pyproject_config)
+        except Exception as e:
+            print(f"Erro ao salvar pyproject.toml: {e}")
+
+
         print("\n--- Relatório de Streams ---")
         for path, config in self.mediamtx_config['paths'].items():
             print(f"  [Câmera Real] {config['source']}")

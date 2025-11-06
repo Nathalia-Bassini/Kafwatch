@@ -20,7 +20,7 @@ class ComposeManager:
             raise FileNotFoundError(f"Arquivo compose não encontrado em: {compose_file_path}")
             
         # O argumento '-f' aponta para o arquivo de configuração
-        self.base_command = ["docker", "compose", "-f", compose_file_path]
+        self.base_command = ["docker-compose", "-f", compose_file_path]
         print(f"ComposeManager inicializado para o arquivo: {compose_file_path}")
 
     def _run_command(self, command_args):
