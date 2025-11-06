@@ -12,4 +12,6 @@ if __name__ == "__main__":
     docker_compose_gen.generate_files(scan_results)
     compose_manager = ComposeManager("docker_files/docker-compose.yml")
     compose_manager.up(build=True, detach=True)
+    kafka_manager = ComposeManager("kafka/docker-compose.yml")
+    kafka_manager.up(build=True, detach=True)
     
