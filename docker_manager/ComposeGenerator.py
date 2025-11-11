@@ -30,8 +30,37 @@ class ComposeGenerator:
                     'networks': [ # Conecta o proxy à nossa rede interna
                         'camera-net'
                     ]
+                },
+                'kafka': {
+                    'image': 'confluentinc/cp-kafka:latest',
+                    'container_name': 'kafka',
+                    'networks': [
+                        'camera-net'
+                    ],
+                    'restart': 'unless-stopped',
+                    'ports': ["9092:9092"],
+                    'environment': {
+                        'KAFKA_PROCESS_ROLES': 'broker,controller',
+                        'KAFKA_NODE_ID': 1,
+                        'KAFKA_CONTROLLER_QUORUM_VOTERS': '1@kafka:9093',
+                        # INTERNA (para os workers) na porta 29092
+                        # EXTERNA (para o host) na porta 9092
+                        'KAFKA_LISTENERS': 'INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093',
+                        'KAFKA_LISTENER_SECURITY_PROTOCOL_MAP': 'INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT',
+                        # Diz aos workers para usar 'kafka:29092'
+                        # Diz ao seu host (ex: consumidor) para usar 'localhost:9092'
+                        'KAFKA_ADVERTISED_LISTENERS': 'INTERNAL://kafka:29092,EXTERNAL://localhost:9092',                        
+                        'KAFKA_CONTROLLER_LISTENER_NAMES': 'CONTROLLER',
+                        # <--- Define qual listener os brokers usarão para falar entre si ---
+                        'KAFKA_INTER_BROKER_LISTENER_NAME': 'INTERNAL',                      
+                        # Configurações KRaft de nó único
+                        'KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR': 1,
+                        'KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR': 1,
+                        'KAFKA_TRANSACTION_STATE_LOG_MIN_ISR': 1,
+                        'CLUSTER_ID': 'MkU3OEVBNTcwNTJENDM2Qk' ,
+                    }
                 }
-                # Os workers serão adicionados aqui dinamicamente
+                    # Os workers serão adicionados aqui dinamicamente
             },
             'networks': { # Define a rede interna
                 'camera-net': {
@@ -71,8 +100,9 @@ version = "0.1.0"
 dependencies = [
     # Coloque suas dependências aqui
     "opencv-python",
-    "python-dotenv"
-    # "kafka-python" (quando você for usar)
+    "python-dotenv",
+    "kafka-python",
+    "numpy"
 ]
 
 [project.scripts]
@@ -150,11 +180,13 @@ kafwatch-run = "kafwatch_worker.capture:main" """]
                     'container_name': worker_service_name,
                     'restart': 'on-failure',
                     'depends_on': [
-                        'rtsp-proxy' # Garante que o proxy inicie primeiro
+                        'rtsp-proxy', # Garante que o proxy inicie primeiro
+                        'kafka'       # Garante que o Kafka inicie primeiro
                     ],
                     'environment': [
                         f'RTSP_URL={worker_rtsp_url}',
-                        f'CAMERA_ID={path_name}'
+                        f'CAMERA_ID={path_name}',
+                        'KAFKA_BOOTSTRAP_SERVERS=kafka:29092'
                     ],
                     'volumes': [
                         # Mapeia a pasta de capturas para o host
@@ -206,17 +238,6 @@ kafwatch-run = "kafwatch_worker.capture:main" """]
                 f.writelines(self.pyproject_config)
         except Exception as e:
             print(f"Erro ao salvar pyproject.toml: {e}")
-
-
-        # --- Salva os arquivos kafka
-        if(not os.path.exists("kafka")):
-            os.makedirs("kafka")
-        kafka_filename = "kafka/docker-compose.yml"    
-        try:
-            with open(kafka_filename, 'w') as f:
-                f.writelines(self.kafka_config)
-        except Exception as e:
-            print(f"Erro ao salvar kafka/docker-compose.yml: {e}")
 
         print("\n--- Relatório de Streams ---")
         for path, config in self.mediamtx_config['paths'].items():

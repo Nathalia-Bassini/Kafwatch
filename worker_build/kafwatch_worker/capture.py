@@ -1,13 +1,25 @@
+from kafka import KafkaProducer
 import cv2
 import sys
-import time
 import os
 from dotenv import load_dotenv
-
+import numpy as np
+import multiprocessing
 def main():
     load_dotenv()
     RTSP_URL = os.environ.get("RTSP_URL")
     CAMERA_ID = os.environ.get("CAMERA_ID")
+    KAFKA_HOST = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+
+    # 1. Configurar e criar o Produtor
+    produtor = KafkaProducer(
+        bootstrap_servers=KAFKA_HOST,
+        linger_ms=1
+    )
+    novo_tamanho = (640, 480) # 480p
+    qualidade_jpg = 40
+    # Fechar o produtor (em um script real, faria isso ao final)
+    #produtor.close()
     # -----------------------------------------------
     # Tenta abrir o stream de vídeo
     cap = cv2.VideoCapture(RTSP_URL)
@@ -16,23 +28,20 @@ def main():
         print(f"Erro: Não foi possível abrir o stream RTSP da URL: {RTSP_URL}")
         sys.exit(1)
 
-    print("Stream RTSP aberto com sucesso! Tentando capturar um frame...")
-    pt = 0
-    j = 0
-    init = time.time()
     while True:
-        final = time.time()
-        tp = final - init
-        pt = tp//0.5
-        if pt>j:
-            j += 1
-            filename = f"captured_frame_{j}.jpg"
-            cv2.imwrite(filename, frame)
-            print(f"Frame capturado e salvo como {filename} em {os.getcwd()} após {tp:.2f} segundos.")
-        if tp > 2:
-            
+        
+        sucess, frame = cap.read()
+
+        if not sucess:
+            print("Erro ao capturar o frame do stream.")
             break
-        ret, frame = cap.read()
+        frame_redimensionado = cv2.resize(frame, novo_tamanho)
+        ret, buffer = cv2.imencode('.jpg', frame_redimensionado)
+
+        produtor.send('meu-topico-de-video', 
+                      key = CAMERA_ID.encode('utf-8'), #chave
+                      value = buffer.tobytes() #dados
+                      )        
         
         if not ret:
             print("Error: Could not read frame. Stream may have ended or is corrupt.")
@@ -46,11 +55,9 @@ def main():
 
     # Libera o objeto de captura
     cap.release()
-    print("Teste de captura finalizado.")
-
-    while True:
-        time.sleep(60)
-        break
+    produtor.flush()
+    produtor.close()
 
 if __name__ == "__main__":
     main()
+

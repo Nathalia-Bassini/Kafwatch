@@ -8,8 +8,9 @@ version = "0.1.0"
 dependencies = [
     # Coloque suas dependências aqui
     "opencv-python",
-    "python-dotenv"
-    # "kafka-python" (quando você for usar)
+    "python-dotenv",
+    "kafka-python",
+    "numpy"
 ]
 
 [project.scripts]
