@@ -1,74 +1,125 @@
-from kafka import KafkaConsumer
-import numpy as np
+import os
 import cv2
+import numpy as np
+import threading
+import time
+from kafka import KafkaConsumer
+from dotenv import load_dotenv
 
-# --- 1. Configurar o Consumidor ---
-# (Rode este script na sua máquina host, não no Docker)
-consumidor = KafkaConsumer(
-    'meu-topico-de-video',
-    bootstrap_servers='localhost:9092',
-    auto_offset_reset='earliest',
-    # Um group_id é sempre recomendado
-    group_id='meu-grupo-de-exibicao-simples' 
-)
-
-print("Iniciando consumidor simples...")
-print("Esperando por mensagens no 'meu-topico-de-video'...")
-
-# --- 2. Dicionário para guardar o frame mais recente de cada câmera ---
-# A chave será o ID da câmera (ex: 'cam_1'), o valor será o frame (imagem)
-ultimos_frames = {}
-
-try:
-    # --- 3. Loop Principal de Consumo e Exibição ---
-    while True:
+# --- Classe Worker para Consumo em Background ---
+class KafkaStreamReader:
+    def __init__(self, bootstrap_servers, topic_name, group_id):
+        self.lock = threading.Lock()
+        self.running = False
+        self.latest_frames = {} # Dicionário compartilhado: {'cam1': frame, 'cam2': frame}
         
-        # A. Pergunte ao Kafka por um lote de mensagens
-        # O poll() busca todas as mensagens que chegaram desde a última chamada
-        novas_mensagens = consumidor.poll(timeout_ms=50) # Timeout de 50ms
+        # Configuração do Consumidor Otimizada para Latência
+        self.consumer = KafkaConsumer(
+            topic_name,
+            bootstrap_servers=bootstrap_servers,
+            group_id=group_id,
+            auto_offset_reset='latest',
+            enable_auto_commit=True,
+            # Fetch settings agressivos para pegar dados assim que chegarem
+            fetch_min_bytes=1, 
+            fetch_max_wait_ms=100,
+            # Importante: não manter metadados velhos
+            metadata_max_age_ms=1000
+        )
+        
+        self.thread = threading.Thread(target=self._update_loop)
+        self.thread.daemon = True # Morre se o programa principal morrer
 
-        # B. Se houver mensagens, processe TODAS elas
-        if novas_mensagens:
-            for particao, mensagens in novas_mensagens.items():
-                for mensagem in mensagens:
-                    try:
-                        # Obtenha o ID da câmera pela chave
-                        id_camera = mensagem.key.decode('utf-8')
-                        
-                        # Decodifique o frame
-                        bytes_do_frame = mensagem.value
-                        nparr = np.frombuffer(bytes_do_frame, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    def start(self):
+        self.running = True
+        self.thread.start()
+        print("[Thread] Leitor Kafka iniciado em background.")
 
-                        # C. Armazene o frame mais recente no dicionário
-                        if frame is not None:
-                            ultimos_frames[id_camera] = frame
+    def stop(self):
+        self.running = False
+        if self.thread.is_alive():
+            self.thread.join()
+        self.consumer.close()
+
+    def _update_loop(self):
+        """Loop que roda em outra thread, focado apenas em REDE e DECODE."""
+        while self.running:
+            # Poll agressivo com timeout baixo
+            pacote = self.consumer.poll(timeout_ms=10)
+            
+            if not pacote:
+                continue
+
+            for particao, mensagens in pacote.items():
+                if not mensagens:
+                    continue
+                
+                # --- ESTRATÉGIA DE FRAME DROPPING ---
+                # Pega apenas a ÚLTIMA mensagem do lote (a mais recente)
+                msg = mensagens[-1]
+                
+                if msg.key is None:
+                    continue
+                
+                cam_id = msg.key.decode('utf-8')
+                
+                try:
+                    # O 'imdecode' é pesado (CPU), por isso fazemos aqui na thread,
+                    # e não na main thread que desenha a tela.
+                    nparr = np.frombuffer(msg.value, np.uint8)
+                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                     
-                    except Exception as e:
-                        # Ignora frames corrompidos ou chaves inválidas
-                        # print(f"Erro ao processar mensagem: {e}")
-                        pass
+                    if frame is not None:
+                        # Seção Crítica: Atualiza o dicionário de forma segura
+                        with self.lock:
+                            self.latest_frames[cam_id] = frame
+                            
+                except Exception as e:
+                    print(f"Erro decode: {e}")
 
-        # D. EXIBA todos os frames mais recentes (fora do loop de poll)
-        # Iteramos pelo dicionário e exibimos cada frame em sua janela
-        if ultimos_frames:
-            for id_camera, frame in ultimos_frames.items():
-                # --- A MÁGICA ACONTECE AQUI ---
-                # cv2.imshow cria/atualiza uma janela baseada no nome
-                # Se id_camera for "cam_1", a janela será "Camera cam_1"
-                # Se id_camera for "cam_2", a janela será "Camera cam_2"
-                cv2.imshow(f"Camera {id_camera}", frame)
-        
-        # E. Verifique se o usuário quer sair
-        # (Pressione 'q' com qualquer janela do OpenCV em foco)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("Tecla 'q' pressionada, saindo...")
-            break
+    def get_frames(self):
+        """Retorna uma cópia segura dos frames atuais para exibição."""
+        with self.lock:
+            return self.latest_frames.copy()
 
-except KeyboardInterrupt:
-    print("\nEncerrando o consumidor (Ctrl+C)...")
-finally:
-    # Fecha tudo
-    cv2.destroyAllWindows()
-    consumidor.close()
-    print("Consumidor fechado.")
+# --- Função Principal (Apenas GUI) ---
+def main():
+    load_dotenv()
+    KAFKA_HOST = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+    TOPIC = 'meu-topico-de-video'
+    GROUP_ID = 'grupo-turbo-v1'
+
+    # 1. Inicia o leitor em background
+    reader = KafkaStreamReader(KAFKA_HOST, TOPIC, GROUP_ID)
+    reader.start()
+
+    print("[Main] Interface gráfica iniciada. Pressione 'q' para sair.")
+
+    try:
+        while True:
+            # 2. Pega os frames já decodificados da thread
+            frames = reader.get_frames()
+
+            if not frames:
+                # Se não tem frames, dorme um pouco para não fritar a CPU à toa
+                time.sleep(0.01)
+                continue
+
+            # 3. Exibe as janelas
+            for cam_id, frame in frames.items():
+                cv2.imshow(f"Monitor: {cam_id}", frame)
+
+            # 4. Controle da GUI
+            # waitKey(1) é o mínimo para o OpenCV processar eventos de janela
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    except KeyboardInterrupt:
+        print("Ctrl+C detectado.")
+    finally:
+        reader.stop()
+        cv2.destroyAllWindows()
+        print("Encerrado.")
+
+if __name__ == "__main__":
+    main()
