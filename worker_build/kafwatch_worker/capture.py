@@ -1,5 +1,4 @@
 import cv2
-import time
 import threading
 import sys
 import os
@@ -55,7 +54,7 @@ def main():
 
     # Configurações de Qualidade
     NOVO_TAMANHO = (640, 480)
-    QUALIDADE_JPEG = 70 # 70 é um ótimo balanço entre tamanho e velocidade
+    QUALIDADE_JPEG = 100 # 70 é um ótimo balanço entre tamanho e velocidade
     
     # 1. Configurar Kafka
     # batch_size maior ajuda no throughput
@@ -80,11 +79,11 @@ def main():
             
             # --- Processamento ---
             frame_redimensionado = cv2.resize(frame, NOVO_TAMANHO)
-            frame_cinza = cv2.cvtColor(frame_redimensionado, cv2.COLOR_BGR2GRAY)
+            #frame_cinza = cv2.cvtColor(frame_redimensionado, cv2.COLOR_BGR2GRAY)
             
             # --- Compressão (Essencial para FPS alto) ---
             # Enviar RAW (300KB) é lento. JPEG (20KB) é rápido.
-            ret, buffer = cv2.imencode('.jpg', frame_cinza, [cv2.IMWRITE_JPEG_QUALITY, QUALIDADE_JPEG])
+            ret, buffer = cv2.imencode('.jpg', frame_redimensionado)
             
             if ret:
                 
