@@ -1,83 +1,87 @@
-from kafka import KafkaProducer
-import cv2
-import sys
-import os
-from dotenv import load_dotenv
-import numpy as np
-import time
+import netifaces
+import ipaddress
+from scapy.all import IP, TCP, sr
 
-def main():
-    load_dotenv()
-    RTSP_URL = os.environ.get("RTSP_URL")
-    CAMERA_ID = os.environ.get("CAMERA_ID")
+redes = []
 
-    # 1. Configurar e criar o Produtor
-    produtor = KafkaProducer(
-        bootstrap_servers='localhost:9092',
-        linger_ms=1
-    )
-    novo_tamanho = (640, 480) # 480p
-    qualidade_jpg = 100
-    # Fechar o produtor (em um script real, faria isso ao final)
-    #produtor.close()
+# Descobre interfaces de rede
+for iface in netifaces.interfaces():
+    addrs = netifaces.ifaddresses(iface)
+    if netifaces.AF_INET in addrs:
+        for ip_info in addrs[netifaces.AF_INET]:
+            ip = ip_info['addr']
+            netmask = ip_info['netmask']
+            
+            # Calcula o range da rede
+            network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
+            print(f"Interface: {iface}")
+            print(f"IP local: {ip}")
+            print(f"Máscara: {netmask}")
+            print(f"Range da rede: {network}")
 
-    # ----------------------------------------------
-    # Tenta abrir o stream de vídeo
-    cap = cv2.VideoCapture(RTSP_URL)
+            # Criar um novo dicionário a cada iteração
+            tabela = {
+                "interface": iface,
+                "ip": ip,
+                "mascara": netmask,
+                "range": str(network)
+            }
 
-    if not cap.isOpened():
-        print(f"Erro: Não foi possível abrir o stream RTSP da URL: {RTSP_URL}")
-        sys.exit(1)
+            # Evita duplicados
+            if tabela not in redes:
+                redes.append(tabela)
 
-    contador_bytes = 0
-    contador_frames = 0
-    tempo_inicio = time.time()
-    while True:
-       
-        sucess, frame = cap.read()
-        if not sucess:
-            print("Erro ao capturar o frame do stream.")
-            break
+            print()
 
-        frame_redimensionado = cv2.resize(frame, novo_tamanho)
-        frame_cinza = cv2.cvtColor(frame_redimensionado, cv2.COLOR_BGR2GRAY)
-        #ret, buffer = cv2.imencode('.jpg', frame_cinza, [cv2.IMWRITE_JPEG_QUALITY, qualidade_jpg]
-        dados_imagem = frame_cinza.tobytes()
+# Faixas privadas definidas pela RFC 1918
+REDES_PRIVADAS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+]
 
-        produtor.send('meu-topico-de-video',
-                      key = CAMERA_ID.encode('utf-8'), #chave
-                      value = dados_imagem #dados
-                      )
-        #produtor.flush() # Garante que a mensagem foi enviada
+def eh_rede_local(ip: str) -> bool:
+    """Verifica se um IP pertence a uma faixa de rede privada (RFC 1918)."""
+    endereco = ipaddress.ip_address(ip)
+    return any(endereco in rede for rede in REDES_PRIVADAS)
 
-        tamanho_msg = len(dados_imagem) # Tamanho em bytes
-        contador_bytes += tamanho_msg
-        contador_frames += 1
+# Filtra e coleta os ranges das redes locais
+ranges_locais = [
+    rede["range"]
+    for rede in redes
+    if eh_rede_local(rede["ip"])
+]
 
-        tempo_atual = time.time()
-        delta_tempo = tempo_atual - tempo_inicio
-        if delta_tempo >= 1.0:
-            mb_por_segundo = (contador_bytes / (1024 * 1024)) / delta_tempo
-            fps = contador_frames / delta_tempo
-            tamanho_medio_kb = (contador_bytes / contador_frames) / 1024        
+import subprocess
 
-            print(f"[Stats {CAMERA_ID}] "
-                    f"Taxa: {mb_por_segundo:.2f} MB/s | "
-                    f"FPS: {fps:.1f} | "
-                    f"Tamanho Médio: {tamanho_medio_kb:.1f} KB")
-      
-            # Reseta os contadores
-            contador_bytes = 0
-            contador_frames = 0
-            tempo_inicio = time.time()
+# Range da sub-rede desejada
+target_network = ipaddress.IPv4Network(ranges_locais[0], strict=False)
 
-        #cv2.imshow("Camera Stream", frame_cinza)
+# Função de ping nativo
+def ping_host(ip):
+    try:
+        subprocess.check_output(["ping", "-c", "1", "-W", "1", str(ip)], stderr=subprocess.DEVNULL)
+        return True
+    except subprocess.CalledProcessError:
+        return False
 
-        # Pressione 'q' para sair
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    # Libera o objeto de captura
-    cap.release()
+# --- Passo 1: Ping em todos os IPs do range ---
+icmp_hosts = []
+print("Verificando resposta ICMP (ping)...")
+for ip in target_network.hosts():  # percorre todos os IPs válidos
+    if ping_host(ip):
+        icmp_hosts.append(str(ip))
+        print(f"{ip} respondeu ao ping")
 
-if __name__ == "__main__":
-    main() 
+# --- Passo 2: TCP SYN scan em múltiplas portas RTSP ---
+rtsp_ports = [554, 8554, 10554]
+
+print("\nVerificando portas RTSP...")
+for ip in icmp_hosts:
+    for port in rtsp_ports:
+        pkt = IP(dst=ip)/TCP(dport=port, flags="S")
+        ans, unans = sr(pkt, timeout=2, retry=0, verbose=0)
+        for sent, received in ans:
+            if received.haslayer(TCP) and received[TCP].flags == "SA":
+                print(f"Possível câmera RTSP encontrada: {received[IP].src} na porta {port}")
+                
