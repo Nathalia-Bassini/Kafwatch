@@ -2,13 +2,21 @@ import netifaces
 import socket
 import ipaddress
 import subprocess
-from scapy.all import IP, TCP, sr
+from scapy.all import IP, TCP, sr, ARP, Ether, srp
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import time
 
-# Descobre interfaces de rede
+# --- Função auxiliar para resolver ARP ---
+def resolver_arp(ip, iface):
+    arp_req = ARP(pdst=ip)
+    ether = Ether(dst="ff:ff:ff:ff:ff:ff")
+    ans, _ = srp(ether/arp_req, timeout=2, iface=iface, verbose=0)
+    if ans:
+        return ans[0][1].hwsrc  # MAC do destino
+    return None
 
+# Descobre interfaces de rede
 def obter_redes():
     redes = []
     for iface in netifaces.interfaces():
@@ -20,15 +28,9 @@ def obter_redes():
                 netmask = ip_info['netmask']
                 network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
 
-                print(f"Interface: {iface}")
-                print(f"IP local: {ip}")
-                print(f"Máscara: {netmask}")
-                print(f"Range da rede: {network}")
-
                 tabela = {"interface": iface, "ip": ip, "mascara": netmask, "range": str(network)}
                 if tabela not in redes:
                     redes.append(tabela)
-                print()
     return redes
 
 # - descobrir qual dos renges são de uma rede local (LAN) -
@@ -43,7 +45,11 @@ def eh_rede_local(ip: str) -> bool: # "-> bool" significa que o retorno vai ser 
     ]
 
     endereco = ipaddress.ip_address(ip) 
-    return any(endereco in rede for rede in REDES_PRIVADAS)
+    for rede in REDES_PRIVADAS:
+        if endereco in rede:
+            return True
+    return False
+
 
 # Função de ping otimizada
 def ping_host(ip):
@@ -55,22 +61,33 @@ def ping_host(ip):
 
 # --- Passo 1: Ping em paralelo ---
 def ping_em_paralelo(redes):
-    ranges_locais = [rede["range"] for rede in redes if eh_rede_local(rede["ip"])]
-    target_network = ipaddress.IPv4Network(ranges_locais[0], strict=False)
+    ranges_locais = []
+    for rede in redes:
+        ip_da_rede = rede["ip"]
+        if eh_rede_local(ip_da_rede):
+            range_da_rede = rede["range"]
+            ranges_locais.append(range_da_rede)
 
-    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:  # max_workers(threads) conforme sua máquina
-        print("Verificando resposta ICMP (ping)...")
+    icmp_hosts = []
+    for range_da_rede in ranges_locais:
+        target_network = ipaddress.IPv4Network(range_da_rede, strict=False)
 
-        icmp_hosts = []
-        futures = {executor.submit(ping_host, str(ip)): ip for ip in target_network.hosts()}
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                icmp_hosts.append(result)
-                print(f"{result} respondeu ao ping")
+        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor: # max_workers(threads) conforme sua máquina
+            futures = {}
+            for ip in target_network.hosts():
+                # cria uma tarefa (future) que vai rodar ping_host(ip) em paralelo
+                future = executor.submit(ping_host, str(ip))
+    
+                # associa esse future ao IP correspondente
+                futures[future] = ip
+
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    icmp_hosts.append(result)
     return icmp_hosts
 
-#
+    
 def testar_rtsp_describe(ip, port=554):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -86,28 +103,17 @@ def testar_rtsp_describe(ip, port=554):
         resposta = s.recv(4096).decode(errors="ignore")
         s.close()
 
-        # Mostra toda a resposta recebida
-        print(f"\n--- Resposta RTSP de {ip}:{port} ---")
-        print(resposta)
-        print("-----------------------------------\n")
-
         if "RTSP/1.0 200 OK" in resposta and "application/sdp" in resposta:
-            print(f"[+] {ip}:{port} respondeu DESCRIBE válido (possível câmera IP)")
             return "camera"
         elif "RTSP/1.0 401 Unauthorized" in resposta:
-            print(f"[?] {ip}:{port} exige autenticação RTSP")
             # Analisa o cabeçalho WWW-Authenticate
             if "DVR" in resposta or "NVR" in resposta:
-                print(f"[!] {ip}:{port} parece ser um DVR/NVR")
                 return "dvr"
             elif "Camera" in resposta or "IP Camera" in resposta:
-                print(f"[+] {ip}:{port} parece ser uma câmera IP protegida por senha")
                 return "camera"
             else:
-                print(f"[?] {ip}:{port} dispositivo RTSP protegido (não identificado)")
                 return "unknown"
         else:
-            print(f"[-] {ip}:{port} não retornou DESCRIBE válido")
             return "invalid"
 
     except Exception as e:
@@ -116,7 +122,7 @@ def testar_rtsp_describe(ip, port=554):
 
 
 # --- Passo 2: TCP SYN scan em múltiplas portas RTSP ---
-def scan_multiplas_portas(icmp_hosts):
+def scan_multiplas_portas(icmp_hosts, redes):
     rtsp_ports = [554, 8554, 10554]
     camera_result = []
     
@@ -124,15 +130,19 @@ def scan_multiplas_portas(icmp_hosts):
     for ip in icmp_hosts:
         for port in rtsp_ports:
             pkt = IP(dst=ip)/TCP(dport=port, flags="S")
-            ans, unans = sr(pkt, timeout=1, retry=0, verbose=0)  # timeout menor
+
+            iface = None
+            for rede in redes:
+                if ipaddress.ip_address(ip) in ipaddress.ip_network(rede["range"], strict=False):
+                    iface = rede["interface"]
+                    break
+            ans, unans = sr(pkt, timeout=1, retry=0, verbose=0, iface=iface)
+
             for sent, received in ans:
                 if received.haslayer(TCP) and received[TCP].flags == "SA":
                     resultado = testar_rtsp_describe(received[IP].src, port)
                     if resultado == "camera":
-                        print(f"Confirmado: {received[IP].src} é uma câmera IP")
                         camera_result.append(ip)
-                    elif resultado == "dvr":
-                        print(f"Confirmado: {received[IP].src} é um DVR/NVR")
     return camera_result
 
 
@@ -140,7 +150,7 @@ def main():
     start_time = time.time()
     
     lista_de_redes = obter_redes() #redes em que a máquina está conectada
-    lista_de_respondedores = ping_em_paralelo(lista_de_redes) #esponderam ao broadcast
+    lista_de_respondedores = ping_em_paralelo(lista_de_redes) #responderam ao broadcast
     """
     lista_de_redes é o parâmetro de entrada, ou seja, a função ping_em_paralelo
     utiliza o que há dentro dela como se fosse o parametro local "redes", quando "redes" é
@@ -148,18 +158,11 @@ def main():
     "lista_de_redes"
 
     """
-    ip_camera = scan_multiplas_portas(lista_de_respondedores) #são cameras da rede local identificada
-
-    print()
-    print(f'{lista_de_redes}', end=" redes em que a máquina está conectada")
-    print()
-    print(f'{lista_de_respondedores}', end=" responderam ao broadcast")
-    print()
-    print(f'{ip_camera}', end=" são cameras da rede local identificada")
-    print()
+    ip_camera = scan_multiplas_portas(lista_de_respondedores, lista_de_redes) #são cameras da rede local identificada
 
     final_time = time.time()
     print(f'{final_time - start_time}')
+    print(f'{ip_camera}')
 
     return 0
 if __name__ == "__main__":
