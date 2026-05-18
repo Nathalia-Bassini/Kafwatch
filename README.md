@@ -1,3 +1,46 @@
+# NetworkScanner: Sistema de encontrar câmeras conectadas nas redes em comum com a máquina
+
+# Funções:
+
+### resolver_arp
+Descobre o endereço MAC de um dispositivo na rede local a partir do seu endereço IP e da resposta à um broadcast. Assim, garantindo a comunicação com o dispositivo através do registro de seu endereço MAC.
+
+### obter_redes
+Obtém informações (interface, IPs, máscaras e range) das redes das quais a máquina possui conexão e guarda os dados em uma lista de dicionários. 
+
+### eh_rede_local
+Possui uma lista com os intervalos padrão dos ranges das redes locais e avalia, com base nessa lista, quais ranges obtidos se encaixam nesses intervalos.
+
+### ping_host
+Ela tenta abrir uma conexão TCP (pois é a utilizada pelas câmeras) com um IP em uma porta específica para verificar se o host está ativo.
+
+### filtragem
+Filtra e adiciona a uma lista apenas as redes locais (LAN) a partir da comparação dos ranges obtidos com o intervalo dos ranges locais registrados na função "eh_rede_local".
+
+### expande_range_lista_IP
+
+
+
+
+
+# Bibliotecas Utilizadas:
+
+### Netifaces:
+Biblioteca utilizada para 
+
+### Socket:
+
+### Ipaddress:
+
+### Scapy.all:
+
+### Concurrent.futures:
+
+### Os:
+
+### Time
+
+
 # KafWatch: Sistema de Streaming de Vídeo Distribuído com Kafka
 
 Este documento descreve a arquitetura, classes e funcionamento do sistema de captura, transmissão e exibição de vídeo em tempo real utilizando Docker, MediaMTX, Apache Kafka e Python (OpenCV).
