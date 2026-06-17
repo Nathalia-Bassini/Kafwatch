@@ -15,7 +15,7 @@ def resolver_arp(ip, iface):
         return ans[0][1].hwsrc  # MAC do destino
     return None
 
-# Descobre interfaces de rede
+# Descobre interfaces de rede.
 def obter_redes():
     """
     # Função da qual se obtem os endereços de ip da máquina host (redes das quais a máquina está conectada)
